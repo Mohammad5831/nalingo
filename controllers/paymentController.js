@@ -7,36 +7,37 @@ require('dotenv').config();
 
 const ZARINPAL = zarinpal.create(process.env.MERCHANT_ID, true);
 
-// Send a request to the payment gateway
+// درخواست پرداخت
 const requestPayment = async (req, res) => {
     try {
         const userUUID = req.user?.userId;
         const user = await existingUserByUUID(userUUID);
-        // Checking the existence of the shopping cart
+        if (!user) return res.status(404).json({ message: 'کاربر یافت نشد' });
+
         const cart = await getOrCreateCart(user.userId);
         if (!cart) return res.status(404).json({ message: 'سبد خرید پیدا نشد' });
 
-        // Checking the existence of the course in the shopping cart
         const cartItems = await getCartItemsByCartId(cart.cartId);
-        if (!cartItems) return res.status(404).json({ message: 'دوره ای پیدا نشد' });
+        if (!cartItems || cartItems.length === 0) {
+            return res.status(404).json({ message: 'دوره‌ای در سبد خرید نیست' });
+        }
 
         const totalPrice = await calculateTotalPrice(cartItems);
+        if (totalPrice <= 0) {
+            return res.status(400).json({ message: 'مبلغ پرداخت معتبر نیست' });
+        }
 
-
-        // const response = await ZARINPAL.PaymentRequest({
-        //     Amount: totalPrice,
-        //     CallbackURL: "http://localhost:3000/api/payment/verify",
-        //     Description: "پرداخت برای خرید دوره‌ها",
-        //     Email: req.body?.email,
-        // });
-        const response = { status: 100 }
+        const response = await ZARINPAL.PaymentRequest({
+            Amount: totalPrice,
+            CallbackURL:`${process.env.CALLBACK_URL}/api/payment/verify`,
+            Description: "پرداخت برای خرید دوره‌ها",
+            Email: req.body?.email,
+        });
 
         if (response.status === 100) {
-            // res.status(200).json({ authority: response.authority, url: response.url });
-            res.status(200).json({ message: 'اتصال به درگاه پرداخت موفق بود' });
-
+            res.status(200).json({ authority: response.authority, url: response.url });
         } else {
-            res.status(400).json({ message: "خطا در اتصال به درگاه." });
+            res.status(400).json({ message: "خطا در اتصال به درگاه پرداخت." });
         }
     } catch (error) {
         console.error(error);
@@ -44,50 +45,62 @@ const requestPayment = async (req, res) => {
     }
 };
 
-// Verification of successful payment
+// بررسی و تأیید پرداخت
 const verifyPayment = async (req, res) => {
     const userUUID = req.user?.userId;
-    // const { Authority, Status } = req.query;
-    const status = 'OK';
+    const { Authority, Status } = req.query;
 
-    if (status !== "OK") {
+    if (Status !== "OK") {
         return res.status(400).json({ message: "پرداخت لغو شد." });
     }
 
     try {
-        const user = await existingUserByUUID(userUUID)
-        // Checking the existence of the shopping cart
+        const user = await existingUserByUUID(userUUID);
+        if (!user) return res.status(404).json({ message: 'کاربر یافت نشد' });
+
         const cart = await getOrCreateCart(user.userId);
         if (!cart) return res.status(404).json({ message: 'سبد خرید پیدا نشد' });
-        // Checking the existence of the course in the shopping cart
+
         const cartItems = await getCartItemsByCartId(cart.cartId);
-        if (!cartItems) return res.status(404).json({ message: 'دوره ای پیدا نشد' });
+        if (!cartItems || cartItems.length === 0) {
+            return res.status(404).json({ message: 'دوره‌ای در سبد خرید نیست' });
+        }
 
         const totalPrice = await calculateTotalPrice(cartItems);
+        if (totalPrice <= 0) {
+            return res.status(400).json({ message: 'مبلغ پرداخت معتبر نیست' });
+        }
 
+        const result = await ZARINPAL.PaymentVerification({
+            Amount: totalPrice,
+            Authority,
+        });
 
-        // const result = await ZARINPAL.PaymentVerification({
-        //     Amount: totalPrice,
-        //     Authority,
-        // });
-        const result = { status: 100, ref_id: 12305434, };
-
+        const alreadyBought = [];
         for (const courseItem of cartItems) {
             const enrollment = await existingEnrolment(courseItem.courseId, user.userId);
             if (enrollment) {
-                return res.status(409).json({ message: `دوره ${courseItem.courseName} قبلا خریداری شده` })
+                alreadyBought.push(courseItem.courseName);
             }
-        };
+        }
 
-        if (result.status === 100) {
+        if (alreadyBought.length > 0) {
+            return res.status(409).json({
+                message:`دوره‌های زیر قبلاً خریداری شده‌اند: ${alreadyBought.join(', ')}`,
+            });
+        }
+
+        if (result.Status === 100) {
             for (const item of cartItems) {
                 await createdEnrollment(user.userId, item.courseId, result.ref_id);
-            };
+            }
+
             await cart.destroy();
-            res.status(200).json({ message: "پرداخت موفق", refId: result.ref_id });
+
+            res.status(200).json({ message: "پرداخت موفق بود", refId: result.ref_id });
         } else {
             res.status(400).json({ message: "پرداخت ناموفق بود." });
-        };
+        }
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: "خطا در بررسی پرداخت." });
