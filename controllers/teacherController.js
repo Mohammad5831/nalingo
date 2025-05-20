@@ -19,11 +19,14 @@ const getTeacherDetail = async (req, res) => {
   }
 };
 
+
 // Edit teacher detail
 const updateTeacherDetail = async (req, res) => {
   try {
     const teacherUUID = req.user.role === "teacher" ? req.user.userId : req.user.userId;
-    const teacherPhoto = req.file ? req.file.path : null;
+    const teacherPhoto = req.files['teacherPhoto']?.[0].path;
+    const teachingPreview = req.files['teachingPreview']?.[0].path;
+    
     // Check the existence of the teacher
     const teacher = await existingTeacherByUUID(teacherUUID);
     if (!teacher) return res.status(404).json({ message: "استاد پیدا نشد." });
@@ -37,14 +40,23 @@ const updateTeacherDetail = async (req, res) => {
         }
       }
     };
+    if (teachingPreview) {
+      if (teacher.teachingPreview) {
+        const oldTeachingPreview = path.join(__dirname, '..', teacher.teachingPreview);
 
-    const updateteacher = await updatedTeacher(req.body, teacherPhoto, teacher);
+        if (fs.existsSync(oldTeachingPreview)) {
+          fs.unlinkSync(oldTeachingPreview);
+        }
+      }
+    };
+
+    const updateteacher = await updatedTeacher(req.body, teacherPhoto, teachingPreview, teacher);
     return res.status(200).json({ message: 'اطلاعات استاد با موفقیت ویرایش شد', updateteacher })
 
   } catch (error) {
     res.status(500).json({ message: 'خطا در ویرایش اطلاعات', error: error.message });
   }
-}
+};
 
 // View all teacher courses
 const getTeacherCourses = async (req, res) => {
